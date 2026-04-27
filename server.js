@@ -1,23 +1,35 @@
 const express = require('express');
 const cors = require('cors');
-const http = require('http');
+const mqtt = require('mqtt');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Store warehouse ESP32 IPs
-// In production this would be a database
-const warehouses = {
-  "WH001": "192.168.4.1",
-  "WH002": "192.168.4.2",
-  "WH003": "192.168.4.3"
-};
+// HiveMQ public broker
+const MQTT_BROKER = 'mqtt://broker.hivemq.com';
+const TOPIC_COMMAND = 'warehouse/rack/command';
+const TOPIC_STATUS  = 'warehouse/rack/status';
+
+// Connect to MQTT broker
+const mqttClient = mqtt.connect(MQTT_BROKER);
+
+mqttClient.on('connect', () => {
+  console.log('MQTT connected to broker');
+  mqttClient.subscribe(TOPIC_STATUS);
+});
+
+mqttClient.on('message', (topic, message) => {
+  console.log(`[MQTT] ${topic}: ${message.toString()}`);
+});
+
+mqttClient.on('error', (err) => {
+  console.log('MQTT error:', err.message);
+});
 
 // -------------------------
 // POST /api/light
 // Body: { warehouse_id, rack }
-// Called by company WMS system
 // -------------------------
 app.post('/api/light', (req, res) => {
   const { warehouse_id, rack } = req.body;
@@ -29,87 +41,62 @@ app.post('/api/light', (req, res) => {
     });
   }
 
-  const esp32Ip = warehouses[warehouse_id];
-  if (!esp32Ip) {
-    return res.status(404).json({
+  // Valid racks
+  const validRacks = ['RackA', 'RackB', 'RackC'];
+  if (!validRacks.includes(rack)) {
+    return res.status(400).json({
       success: false,
-      message: `Warehouse ${warehouse_id} not found`
+      message: `Invalid rack: ${rack}. Use RackA, RackB or RackC`
     });
   }
 
-  // Send command to ESP32
-  const url = `http://${esp32Ip}/rack?name=${rack}`;
-  http.get(url, (esp32Res) => {
-    let data = '';
-    esp32Res.on('data', chunk => data += chunk);
-    esp32Res.on('end', () => {
-      console.log(`[OK] ${warehouse_id} → ${rack} → ${esp32Ip}`);
-      res.json({
-        success: true,
-        warehouse: warehouse_id,
-        rack: rack,
-        esp32: esp32Ip,
-        response: data
-      });
-    });
-  }).on('error', (err) => {
-    console.log(`[ERROR] Cannot reach ESP32 at ${esp32Ip}`);
-    res.status(500).json({
-      success: false,
-      message: `Cannot reach ESP32: ${err.message}`
-    });
+  // Publish MQTT message
+  // Format: WH001:RackA
+  const message = `${warehouse_id}:${rack}`;
+  mqttClient.publish(TOPIC_COMMAND, message);
+
+  console.log(`[LIGHT] Published: ${message}`);
+
+  res.json({
+    success: true,
+    warehouse: warehouse_id,
+    rack: rack,
+    message: `Command sent to ${warehouse_id} → ${rack}`
   });
 });
 
 // -------------------------
-// GET /api/warehouses
-// Returns all warehouses
-// -------------------------
-app.get('/api/warehouses', (req, res) => {
-  const list = Object.entries(warehouses).map(([id, ip]) => ({
-    id,
-    esp32Ip: ip
-  }));
-  res.json({ success: true, warehouses: list });
-});
-
-// -------------------------
-// POST /api/warehouses
-// Add a new warehouse
-// Body: { id, esp32Ip }
-// -------------------------
-app.post('/api/warehouses', (req, res) => {
-  const { id, esp32Ip } = req.body;
-  if (!id || !esp32Ip) {
-    return res.status(400).json({
-      success: false,
-      message: 'Missing id or esp32Ip'
-    });
-  }
-  warehouses[id] = esp32Ip;
-  console.log(`[ADDED] Warehouse ${id} → ${esp32Ip}`);
-  res.json({ success: true, message: `Warehouse ${id} added` });
-});
-
-// -------------------------
 // GET /api/health
-// Check if server is running
 // -------------------------
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
     message: 'Warehouse server running',
-    warehouses: Object.keys(warehouses).length
+    mqtt: mqttClient.connected ? 'connected' : 'disconnected'
   });
 });
 
-// Start server
+// -------------------------
+// GET /api/warehouses
+// -------------------------
+app.get('/api/warehouses', (req, res) => {
+  res.json({
+    success: true,
+    warehouses: [
+      { id: 'WH001', name: 'Warehouse 1' },
+      { id: 'WH002', name: 'Warehouse 2' },
+      { id: 'WH003', name: 'Warehouse 3' }
+    ]
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('================================');
   console.log('  Warehouse LED Server');
   console.log('================================');
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/api/health`);
+  console.log(`Port     : ${PORT}`);
+  console.log(`MQTT     : ${MQTT_BROKER}`);
+  console.log(`Topic    : ${TOPIC_COMMAND}`);
   console.log('================================');
 });
