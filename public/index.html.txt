@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Warehouse Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f1a; color: #e0e0e0; min-height: 100vh; }
+    header { background: #16213e; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1e2d4a; }
+    header h1 { font-size: 20px; font-weight: 700; color: #fff; }
+    .badge { font-size: 11px; padding: 4px 10px; border-radius: 20px; font-weight: 600; }
+    .badge-green { background: #1b5e20; color: #a5d6a7; }
+    .badge-red { background: #b71c1c; color: #ffcdd2; }
+    .badge-gray { background: #333; color: #aaa; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .section-title { font-size: 14px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .card { background: #16213e; border-radius: 12px; padding: 20px; border: 1px solid #1e2d4a; }
+    .card h3 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .card .id { font-size: 12px; color: #888; margin-bottom: 12px; }
+    .card .ip { font-size: 13px; color: #e94560; margin-bottom: 16px; font-family: monospace; }
+    .rack-row { display: flex; gap: 8px; margin-top: 12px; }
+    .rack-btn { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; background: #0f3460; color: #aaa; transition: all 0.2s; }
+    .rack-btn:hover { background: #e94560; color: #fff; }
+    .rack-btn.active { background: #1b5e20; color: #a5d6a7; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.7;} }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .dot-green { background: #4caf50; }
+    .dot-red { background: #f44336; }
+    .dot-gray { background: #666; }
+    table { width: 100%; border-collapse: collapse; background: #16213e; border-radius: 12px; overflow: hidden; }
+    th { background: #0f3460; padding: 12px 16px; text-align: left; font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; }
+    td { padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #1e2d4a; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1a2a4a; }
+    .rack-tag { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .RackA { background: #1b5e20; color: #a5d6a7; }
+    .RackB { background: #0d47a1; color: #90caf9; }
+    .RackC { background: #4a148c; color: #ce93d8; }
+    .empty { text-align: center; color: #555; padding: 40px; font-size: 14px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .stat { background: #16213e; border-radius: 12px; padding: 20px; border: 1px solid #1e2d4a; text-align: center; }
+    .stat .num { font-size: 32px; font-weight: 700; color: #e94560; }
+    .stat .label { font-size: 12px; color: #888; margin-top: 4px; }
+    .refresh-btn { background: #e94560; color: #fff; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; margin-left: 12px; }
+    .refresh-btn:hover { background: #c0392b; }
+    .time { font-size: 11px; color: #555; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Warehouse Dashboard</h1>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span id="mqttStatus" class="badge badge-gray">Connecting...</span>
+    <span id="lastUpdate" class="time"></span>
+    <button class="refresh-btn" onclick="loadAll()">Refresh</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat">
+      <div class="num" id="statWarehouses">0</div>
+      <div class="label">Warehouses</div>
+    </div>
+    <div class="stat">
+      <div class="num" id="statOnline">0</div>
+      <div class="label">ESP32 Online</div>
+    </div>
+    <div class="stat">
+      <div class="num" id="statScans">0</div>
+      <div class="label">Total Scans</div>
+    </div>
+    <div class="stat">
+      <div class="num" id="statActive">0</div>
+      <div class="label">Active LEDs</div>
+    </div>
+  </div>
+
+  <!-- Warehouses -->
+  <div class="section-title">Warehouses & Rack Control</div>
+  <div id="warehouseGrid" class="grid"></div>
+
+  <!-- Scan History -->
+  <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+    <span>Scan History</span>
+    <button class="refresh-btn" onclick="loadHistory()">Reload</button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Barcode</th>
+        <th>Product</th>
+        <th>Warehouse</th>
+        <th>Rack</th>
+      </tr>
+    </thead>
+    <tbody id="historyBody">
+      <tr><td colspan="5" class="empty">No scans yet</td></tr>
+    </tbody>
+  </table>
+
+</div>
+
+<script>
+const API = '';  // same origin
+
+async function loadAll() {
+  await Promise.all([loadWarehouses(), loadHistory(), loadHealth()]);
+  document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+async function loadHealth() {
+  try {
+    const r = await fetch(API + '/api/health');
+    const d = await r.json();
+    const el = document.getElementById('mqttStatus');
+    el.textContent = 'MQTT ' + d.mqtt;
+    el.className = 'badge ' + (d.mqtt === 'connected' ? 'badge-green' : 'badge-red');
+    document.getElementById('statScans').textContent = d.totalScans || 0;
+  } catch(e) {}
+}
+
+async function loadWarehouses() {
+  try {
+    const r = await fetch(API + '/api/warehouses');
+    const d = await r.json();
+    const grid = document.getElementById('warehouseGrid');
+    grid.innerHTML = '';
+
+    let online = 0;
+    let active = 0;
+    document.getElementById('statWarehouses').textContent = d.warehouses.length;
+
+    d.warehouses.forEach(w => {
+      if (w.status === 'online') online++;
+      if (w.activeRack) active++;
+
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <h3>${w.name}</h3>
+          <span class="badge ${w.status === 'online' ? 'badge-green' : 'badge-gray'}">
+            ${w.status}
+          </span>
+        </div>
+        <div class="id">ID: ${w.id}</div>
+        <div class="ip">${w.esp32Ip}</div>
+        ${w.activeRack ? `<div style="font-size:12px;color:#a5d6a7;margin-bottom:8px;">🔆 ${w.activeRack} is ON</div>` : '<div style="font-size:12px;color:#555;margin-bottom:8px;">All LEDs off</div>'}
+        <div style="font-size:12px;color:#888;margin-bottom:6px;">Manual control:</div>
+        <div class="rack-row">
+          <button class="rack-btn ${w.activeRack === 'RackA' ? 'active' : ''}" onclick="lightRack('${w.id}','RackA')">RackA</button>
+          <button class="rack-btn ${w.activeRack === 'RackB' ? 'active' : ''}" onclick="lightRack('${w.id}','RackB')">RackB</button>
+          <button class="rack-btn ${w.activeRack === 'RackC' ? 'active' : ''}" onclick="lightRack('${w.id}','RackC')">RackC</button>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+
+    document.getElementById('statOnline').textContent = online;
+    document.getElementById('statActive').textContent = active;
+  } catch(e) {
+    console.error('Failed to load warehouses:', e);
+  }
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch(API + '/api/history');
+    const d = await r.json();
+    const tbody = document.getElementById('historyBody');
+
+    if (!d.history || d.history.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No scans yet</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = d.history.map(h => `
+      <tr>
+        <td style="color:#555;">${new Date(h.timestamp).toLocaleTimeString()}</td>
+        <td style="font-family:monospace;">${h.barcode}</td>
+        <td>${h.product_name}</td>
+        <td>${h.warehouse_name}</td>
+        <td><span class="rack-tag ${h.rack}">${h.rack}</span></td>
+      </tr>
+    `).join('');
+  } catch(e) {}
+}
+
+async function lightRack(warehouseId, rack) {
+  try {
+    const r = await fetch(API + '/api/light', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ warehouse_id: warehouseId, rack, product_name: 'Manual', barcode: 'MANUAL' })
+    });
+    const d = await r.json();
+    if (d.success) {
+      setTimeout(loadWarehouses, 500);
+    }
+  } catch(e) {}
+}
+
+// Auto refresh every 5 seconds
+loadAll();
+setInterval(loadAll, 5000);
+</script>
+</body>
+</html>
