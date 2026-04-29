@@ -16,8 +16,6 @@ const TOPIC_STATUS  = 'warehouse/rack/status';
 // In-memory data
 const warehouses = {
   "WH001": { name: "Warehouse 1", esp32Ip: "192.168.4.1", status: "offline", activeRack: null },
-  "WH002": { name: "Warehouse 2", esp32Ip: "192.168.4.2", status: "offline", activeRack: null },
-  "WH003": { name: "Warehouse 3", esp32Ip: "192.168.4.3", status: "offline", activeRack: null },
 };
 
 const scanHistory = []; // last 100 scans
@@ -39,22 +37,16 @@ mqttClient.on('message', (topic, message) => {
   if (topic === TOPIC_STATUS) {
     // ESP32 online/offline status
     if (msg === 'ESP32 online') {
-      Object.keys(warehouses).forEach(id => {
-        warehouses[id].status = 'online';
-      });
-    }
-    if (msg.startsWith('LED ON:')) {
-      const rack = msg.replace('LED ON: ', '').trim();
-      Object.keys(warehouses).forEach(id => {
-        warehouses[id].activeRack = rack;
-      });
-    }
-    if (msg === 'LED off') {
-      Object.keys(warehouses).forEach(id => {
-        warehouses[id].activeRack = null;
-      });
-    }
-  }
+  // Only mark WH001 online since that's the only ESP32
+  if (warehouses['WH001']) warehouses['WH001'].status = 'online';
+}
+if (msg.startsWith('LED ON:')) {
+  const rack = msg.replace('LED ON: ', '').trim();
+  if (warehouses['WH001']) warehouses['WH001'].activeRack = rack;
+}
+if (msg === 'LED off') {
+  if (warehouses['WH001']) warehouses['WH001'].activeRack = null;
+}}
 });
 
 mqttClient.on('error', (err) => {
