@@ -8,20 +8,24 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// HiveMQ public broker
 const MQTT_BROKER   = 'mqtt://broker.hivemq.com';
 const TOPIC_COMMAND = 'warehouse/rack/command';
 const TOPIC_STATUS  = 'warehouse/rack/status';
 
-// In-memory data
 const warehouses = {
-  "WH001": { name: "Warehouse 1", esp32Ip: "192.168.4.1", status: "offline", activeRack: null },
+  "WH001": {
+    name: "Warehouse 1",
+    esp32Ip: "192.168.4.1",
+    status: "offline",
+    activeRack: null,
+    lastSeen: null
+  }
 };
 
-const scanHistory = []; // last 100 scans
+const scanHistory = [];
 const MAX_HISTORY = 100;
 
-// Connect to MQTT broker
+// MQTT connect
 const mqttClient = mqtt.connect(MQTT_BROKER);
 
 mqttClient.on('connect', () => {
@@ -35,45 +39,74 @@ mqttClient.on('message', (topic, message) => {
   console.log(`[MQTT] ${topic}: ${msg}`);
 
   if (topic === TOPIC_STATUS) {
-    // ESP32 online/offline status
-    if (msg === 'ESP32 online') {
-  // Only mark WH001 online since that's the only ESP32
-  if (warehouses['WH001']) warehouses['WH001'].status = 'online';
-}
-if (msg.startsWith('LED ON:')) {
-  const rack = msg.replace('LED ON: ', '').trim();
-  if (warehouses['WH001']) warehouses['WH001'].activeRack = rack;
-}
-if (msg === 'LED off') {
-  if (warehouses['WH001']) warehouses['WH001'].activeRack = null;
-}}
+    if (
+      msg === 'ESP32 online' ||
+      msg === 'LED off' ||
+      msg.startsWith('LED ON:')
+    ) {
+      warehouses['WH001'].status   = 'online';
+      warehouses['WH001'].lastSeen = Date.now();
+    }
+
+    if (msg.startsWith('LED ON:')) {
+      const rack = msg.replace('LED ON: ', '').trim();
+      warehouses['WH001'].activeRack = rack;
+    }
+
+    if (msg === 'LED off') {
+      warehouses['WH001'].activeRack = null;
+    }
+  }
 });
 
 mqttClient.on('error', (err) => {
   console.log('MQTT error:', err.message);
 });
 
+// Check offline every 5 seconds
+// If no heartbeat for 15 seconds → mark offline
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(warehouses).forEach(id => {
+    const w = warehouses[id];
+    if (w.lastSeen && now - w.lastSeen > 15000) {
+      if (w.status !== 'offline') {
+        console.log(`[OFFLINE] ${id} went offline`);
+      }
+      w.status     = 'offline';
+      w.activeRack = null;
+    }
+    // Never seen = offline
+    if (!w.lastSeen) {
+      w.status = 'offline';
+    }
+  });
+}, 5000);
+
 // -------------------------
 // POST /api/light
-// Body: { warehouse_id, rack, product_name, barcode }
 // -------------------------
 app.post('/api/light', (req, res) => {
   const { warehouse_id, rack, product_name, barcode } = req.body;
 
   if (!warehouse_id || !rack) {
-    return res.status(400).json({ success: false, message: 'Missing warehouse_id or rack' });
+    return res.status(400).json({
+      success: false,
+      message: 'Missing warehouse_id or rack'
+    });
   }
 
   const validRacks = ['RackA', 'RackB', 'RackC'];
   if (!validRacks.includes(rack)) {
-    return res.status(400).json({ success: false, message: `Invalid rack: ${rack}` });
+    return res.status(400).json({
+      success: false,
+      message: `Invalid rack: ${rack}`
+    });
   }
 
-  // Publish MQTT
   const message = `${warehouse_id}:${rack}`;
   mqttClient.publish(TOPIC_COMMAND, message);
 
-  // Save to history
   const entry = {
     id: Date.now(),
     timestamp: new Date().toISOString(),
@@ -86,7 +119,6 @@ app.post('/api/light', (req, res) => {
   scanHistory.unshift(entry);
   if (scanHistory.length > MAX_HISTORY) scanHistory.pop();
 
-  // Update active rack
   if (warehouses[warehouse_id]) {
     warehouses[warehouse_id].activeRack = rack;
   }
@@ -110,21 +142,30 @@ app.get('/api/warehouses', (req, res) => {
     name: data.name,
     esp32Ip: data.esp32Ip,
     status: data.status,
-    activeRack: data.activeRack
+    activeRack: data.activeRack,
+    lastSeen: data.lastSeen
   }));
   res.json({ success: true, warehouses: list });
 });
 
 // -------------------------
 // POST /api/warehouses
-// Add warehouse
 // -------------------------
 app.post('/api/warehouses', (req, res) => {
   const { id, name, esp32Ip } = req.body;
   if (!id || !name || !esp32Ip) {
-    return res.status(400).json({ success: false, message: 'Missing id, name or esp32Ip' });
+    return res.status(400).json({
+      success: false,
+      message: 'Missing id, name or esp32Ip'
+    });
   }
-  warehouses[id] = { name, esp32Ip, status: 'offline', activeRack: null };
+  warehouses[id] = {
+    name,
+    esp32Ip,
+    status: 'offline',
+    activeRack: null,
+    lastSeen: null
+  };
   res.json({ success: true, message: `Warehouse ${id} added` });
 });
 
